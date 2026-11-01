@@ -58,10 +58,8 @@ Potential applications include:
 ## 🔮 Future Scope
 
 - Improved detection accuracy against advanced voice cloning models.
-- Integration with live phone calls.
-- Enhanced Android integration for automatic suspicious-call detection.
+- Integration for video calls
 - Support for multiple languages and accents.
-- Continuous model improvements against emerging AI-generated voices.
 
 ## 👨‍💻 Project
 
