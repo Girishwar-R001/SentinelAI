@@ -1,0 +1,216 @@
+================================================================================
+                         SENTINELAI: FRAMEWORKS, TOOLS &
+                          A-TO-Z ARCHITECTURE DETAILS
+================================================================================
+
+This document provides a comprehensive list of all frameworks, libraries, APIs, and 
+tools utilized in the SentinelAI project, followed by a complete end-to-end (A to Z) 
+technical explanation of how the application functions, including recent accuracy 
+and performance improvements.
+
+--------------------------------------------------------------------------------
+PART 1: FRAMEWORKS, LIBRARIES, AND TOOLS USED
+--------------------------------------------------------------------------------
+
+A. Machine Learning & Dataset Generation (Python Environment)
+   1. Python 3.x: The core programming language used to build the training pipeline.
+   2. TensorFlow / Keras (v2.16+): Used for building, compiling, training, and 
+      evaluating the 1D Convolutional Neural Network (CNN). Also utilized to export 
+      the trained Keras model into the TensorFlow Lite format (.tflite).
+   3. Librosa: An audio and music processing library used to load WAV/MP3 files, 
+      resample audio signals to 16,000 Hz, and perform extreme data augmentation 
+      (pitch-shifting, time-stretching, and noise injection) to force the model 
+      to generalize real human voices.
+   4. gTTS (Google Text-to-Speech): Used to programmatically generate clean synthetic 
+      voices speaking conversational bank scam scripts.
+   5. NumPy: Used for efficient mathematical operations on multi-dimensional arrays, 
+      including audio amplitude normalization, adding Gaussian noise to waveforms, 
+      shuffling datasets, and adjusting dimensions.
+   6. SoundFile: A library to write processed NumPy arrays back into physical WAV files.
+   7. Glob & OS: Core Python modules used to search directories, manage paths, and 
+      create training directories.
+
+B. Android Application Architecture
+   1. Kotlin & JVM: The language and runtime platform used to write the Android app, 
+      configured with JVM Toolchain v17.
+   2. Gradle (Kotlin DSL): Used to orchestrate the build process and handle 
+      dependencies. Uses Android Gradle Plugin (AGP) version 9.0.1 and Kotlin 
+      plugin version 2.3.20.
+   3. Jetpack Compose (BOM 2026.03.01): The modern UI toolkit used to build the entire 
+      reactive, dark-mode user interface. Specific components include:
+      - androidx.compose.ui
+      - androidx.compose.material3 (Material Design 3 components)
+      - androidx.activity.compose (Integration between Compose and Activity)
+   4. Android Lifecycle Components (v2.10.0):
+      - lifecycle-runtime-compose & lifecycle-viewmodel-compose (To collect states 
+        in a lifecycle-aware manner).
+   5. Navigation 3 (v1.0.1): Modern Jetpack navigation framework (`navigation3-ui` 
+      and `navigation3-runtime`).
+   6. TensorFlow Lite Android Support:
+      - `org.tensorflow:tensorflow-lite:2.16.1`: The primary runtime engine used for 
+        on-device machine learning inference.
+      - `org.tensorflow:tensorflow-lite-select-tf-ops:2.16.1`: Included to support 
+        complex select TensorFlow operators during TFLite execution.
+   7. Android Audio APIs:
+      - `AudioRecord`: Captures low-latency, raw 16-bit PCM mono audio buffers directly 
+        from the physical microphone (`MediaRecorder.AudioSource.MIC`) at 16,000 Hz.
+   8. Kotlin Coroutines (v1.10.2): Used to perform heavy operations in the background 
+      without blocking the main thread, such as streaming audio samples, performing 
+      VAD, running TFLite inference, and running simulations.
+
+
+--------------------------------------------------------------------------------
+PART 2: THE A-TO-Z ARCHITECTURE AND FUNCTIONAL FLOW
+--------------------------------------------------------------------------------
+
+The application runs in two distinct phases: 
+- Phase 1: Offline Training (Python script workflow generating the .tflite model)
+- Phase 2: Online Inference & Live Monitoring (Android app running on-device)
+
+Below is the step-by-step lifecycle of the entire application.
+
+================================================================================
+PHASE 1: OFFLINE MODEL DEVELOPMENT (A TO E)
+================================================================================
+
+[Step A] Dataset Generation & Voice Augmentation (download_sample_data.py)
+   1. The script initializes directories `dataset/real` and `dataset/fake`.
+   2. Generating Fake/Synthetic Samples:
+      - 15 scam-related phrases are compiled.
+      - gTTS generates 5 variations of each phrase, resulting in 75 initial MP3s.
+      - Librosa resamples them to 16,000 Hz, applies slight random pitch-shifts 
+        to vary the synthetic distribution, and saves them as WAV files.
+   3. Generating Real Samples:
+      - A sample of real human speech is loaded (fallback to LibriSpeech example).
+      - Extreme Data Augmentation: To prevent the model from overfitting to one 
+        human voice and causing false positives, the script generates 100 unique 
+        samples from the base audio by applying robust pitch shifting, random 
+        time-stretching, and static noise injection.
+
+[Step B] Audio Preprocessing (train_model.py)
+   1. Resampling and Chunking:
+      - All 175 audio files are loaded at 16kHz and divided into exact 1-second 
+        chunks (16,000 samples), padded with zeros if necessary.
+   2. Amplitude Normalization:
+      - Each chunk is divided by its maximum absolute amplitude to ensure the 
+        model learns structural voice properties rather than volume.
+   3. Gaussian Noise Augmentation:
+      - Random Gaussian noise is added to simulate microphone static and channel 
+        distortion, effectively doubling the dataset size.
+   4. Reshaping:
+      - Inputs are reshaped to `(samples, 16000, 1)` and labels are assigned 
+        (0.0 for real speech, 1.0 for synthetic).
+
+[Step C] 1D Convolutional Neural Network (CNN) Architecture
+   The network processes raw 1D waveforms directly rather than computing 2D spectrograms:
+   1. Input Layer: Accept raw vector of dimension `(16000, 1)`.
+   2. Convolutional Block 1:
+      - Conv1D: 32 filters, large kernel size of 64, stride of 8 (coarse feature extractor).
+      - Batch Normalization & ReLU activation.
+      - MaxPooling1D: pool size 4.
+      - Dropout: 20% to prevent overfitting.
+   3. Convolutional Block 2:
+      - Conv1D: 64 filters, kernel size of 32, stride of 4.
+      - Batch Normalization & ReLU activation.
+      - MaxPooling1D: pool size 4.
+      - Dropout: 20%.
+   4. Convolutional Block 3:
+      - Conv1D: 128 filters, kernel size of 16, stride of 2.
+      - Batch Normalization & ReLU activation.
+      - MaxPooling1D: pool size 2.
+      - Dropout: 20%.
+   5. Classification Dense Block:
+      - Flatten layer converts 3D tensors to 1D vectors.
+      - Dense Layer: 64 units, ReLU activation.
+      - Dropout: 30%.
+      - Output Layer: Dense layer, 1 unit, Sigmoid activation (outputs float between 
+        0.0 [Real] and 1.0 [Synthetic/Spoofed]).
+
+[Step D] Model Training
+   1. The model compiles using the Adam optimizer (learning rate = 0.001) and 
+      binary crossentropy loss.
+   2. The dataset is trained for 40 epochs with a batch size of 8, allowing it 
+      to deeply learn the diverse variations in the augmented dataset.
+
+[Step E] TFLite Conversion & Asset Integration
+   1. The Keras model is converted into the TensorFlow Lite format (.tflite).
+   2. Crucially, no quantization is used. This prevents weight/activation distortions that 
+      can trigger runtime incompatibility (e.g., FULLY_CONNECTED operations v12 issues) 
+      on various Android systems.
+   3. The generated file `voice_spoof_detector.tflite` (~1.04 MB) is copied into the 
+      Android project assets.
+
+
+================================================================================
+PHASE 2: ONLINE REAL-TIME INFERENCE ON ANDROID (F TO L)
+================================================================================
+
+[Step F] Audio Acquisition (AudioRecordManager.kt)
+   1. Initialization:
+      - Configures Android's `AudioRecord` API to open a stream at 16,000 Hz, mono, 
+        using 16-bit PCM encoding.
+   2. Coroutine Stream Capture:
+      - Reads incoming audio into a buffer.
+      - Calculates Root Mean Square (RMS) energy for the live UI amplitude visualizer.
+      - Converts each 16-bit short sample to a normalized float (`short_val / 32767.0`).
+   3. Rolling 1-Second Window:
+      - The normalized floats are written to a rolling `floatBuffer` of 16,000 samples.
+      - When full, the buffer is dispatched to the processing callback.
+
+[Step G] Voice Activity Detection (VAD) & Normalization (MainActivity.kt)
+   1. The raw 16,000 floats are received in `MainActivity`.
+   2. Strict VAD Filter:
+      - The RMS energy is computed.
+      - If RMS is < 0.05 (silence, breathing, or background room noise), the app 
+        bypasses inference entirely to prevent the CNN from analyzing garbage audio.
+   3. Safe Amplitude Normalization:
+      - If VAD succeeds, the 16,000 samples are normalized by dividing by the 
+        maximum amplitude, ONLY IF the amplitude is > 0.05f. This critical threshold 
+        prevents microscopic static from being amplified to full volume, which would 
+        cause false positive synthetic classifications.
+
+[Step H] Local Machine Learning Inference (VoiceSpoofDetector.kt)
+   1. Memory Mapping:
+      - The app maps `voice_spoof_detector.tflite` into memory via `FileChannel`.
+   2. Input/Output Buffer Operations:
+      - Direct native ByteBuffers are allocated for inputs (`16000 * 4 = 64,000` bytes).
+      - The normalized 16,000 float samples are loaded.
+   3. Running Inference:
+      - Invokes `interpreter.run(inputBuffer, outputBuffer)`.
+      - Extracts the output probability (0.0 to 1.0) and calculates inference latency (~1-5ms).
+
+[Step I] Temporal Probability Smoothing (MainActivity.kt)
+   1. The activity maintains a rolling history of the last 5 inference results.
+   2. The raw probabilities are smoothed using a simple rolling average to prevent 
+      sudden spikes caused by momentary audio glitches.
+
+[Step J] Live Transcript NLP Analysis (ConversationAnalyzer.kt)
+   1. Trigger Keywords Scans:
+      The transcript is mapped against 4 intent categories:
+      - `financial_request`, `artificial_urgency`, `impersonation`, `otp_request`.
+   2. Scam Scoring:
+      - 3+ intents -> Scam Score = 0.95
+      - 2 intents -> Scam Score = 0.70
+      - 1 intent -> Scam Score = 0.40
+      - 0 intents -> Scam Score = 0.10
+
+[Step K] Composite Risk Calculation (RiskEngine.kt)
+   1. The smoothed voice probability and NLP scam score are passed to the `RiskEngine`.
+   2. Contextual Dampening Logic:
+      - If the voice synthetic probability is very high (>85%) OR the conversation 
+        is very suspicious (>60%), the engine uses the Max-Signal principle.
+      - Otherwise, it dynamically dampens the voice probability multiplier by 0.7x 
+        to ensure slight AI confidence spikes don't trigger false positives if the 
+        conversation is completely innocent.
+   3. Score Mapping:
+      - `finalScore = combinedScore * 100`.
+      - Maps to SAFE, LOW, MEDIUM, HIGH, or CRITICAL.
+   4. Signal Compilation:
+      - The engine aggregates specific string reasons (e.g., "Possible AI-generated 
+        voice detected (88%)") if strict thresholds are crossed (e.g. >0.75f).
+
+[Step L] UI Reactive Render (HomeScreen.kt)
+   1. Jetpack Compose recomposes the layout automatically based on state variables.
+   2. The scam risk card changes colors (Green to Crimson) and displays the numerical 
+      score and threat reasons dynamically.
+================================================================================
